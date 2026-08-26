@@ -12,5 +12,7 @@ public class Estudiante
 
     public int ProgramaAcademicoId { get; set; }
 
+    public string? Celular { get; set; }
+
     public ProgramaAcademico? ProgramaAcademico { get; set; }
 }
