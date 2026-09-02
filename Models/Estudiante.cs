@@ -14,5 +14,7 @@ public class Estudiante
 
     public string? Celular { get; set; }
 
+    public string? Direccion { get; set; }
+
     public ProgramaAcademico? ProgramaAcademico { get; set; }
 }
