@@ -52,10 +52,4 @@ public class ProgramasController : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete("{id}")]
-    public async Task<ActionResult> DeletePrograma(int id)
-    {
-        await _programaRepository.DeleteProgramaAsync(id);
-        return NoContent();
-    }
 }
