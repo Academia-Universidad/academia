@@ -1,0 +1,107 @@
+name: Programacion V - Desplegar en Docker Local
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-local:
+    # Este workflow se ejecuta en el computador local que tenga
+    # instalado y configurado un GitHub Actions Self-hosted Runner.
+    runs-on: [self-hosted, Windows]
+
+    steps:
+      # ==================================================
+      # PASO 1
+      # Descargar el código del repositorio
+      # ==================================================
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      # ==================================================
+      # PASO 2
+      # Preparar carpeta persistente para SQLite
+      # ==================================================
+      - name: Preparar datos SQLite
+        shell: powershell
+        run: |
+          $DataDir = "$env:USERPROFILE\ProgramacionV\Data"
+
+          if (-not (Test-Path $DataDir)) {
+            New-Item -ItemType Directory -Path $DataDir -Force
+          }
+
+          $Database = Join-Path $DataDir "universidad.db"
+
+          if (-not (Test-Path $Database)) {
+            Copy-Item ".\Data\universidad.db" $Database
+            Write-Host "Base inicial copiada a $Database"
+          }
+          else {
+            Write-Host "La base existente se conserva: $Database"
+          }
+
+      # ==================================================
+      # PASO 3
+      # Construir la imagen Docker directamente
+      # en el computador local
+      # ==================================================
+      - name: Construir imagen Docker local
+        shell: powershell
+        run: |
+          docker build -t programacionv-api:latest .
+
+      # ==================================================
+      # PASO 4
+      # Detener y eliminar el contenedor anterior
+      # si ya existe
+      # ==================================================
+      - name: Eliminar contenedor anterior
+        shell: powershell
+        run: |
+          $Name = "programacionv-api"
+
+          $Exists = docker ps -a --filter "name=^/$Name$" --format "{{.Names}}"
+
+          if ($Exists -eq $Name) {
+            docker stop $Name 2>$null
+            docker rm $Name
+          }
+          else {
+            Write-Host "No existe un contenedor anterior."
+          }
+
+      # ==================================================
+      # PASO 5
+      # Crear el nuevo contenedor local
+      # Windows: 5252 -> Contenedor: 8080
+      # ==================================================
+      - name: Ejecutar contenedor local
+        shell: powershell
+        run: |
+          $Name = "programacionv-api"
+          $DataDir = "$env:USERPROFILE\ProgramacionV\Data"
+
+          docker run -d `
+            --name $Name `
+            --restart unless-stopped `
+            -p 5252:8080 `
+            -v "${DataDir}:/app/Data" `
+            -e ASPNETCORE_ENVIRONMENT=Production `
+            -e ASPNETCORE_URLS=http://+:8080 `
+            programacionv-api:latest
+
+      # ==================================================
+      # PASO 6
+      # Verificar que el contenedor quedó ejecutándose
+      # ==================================================
+      - name: Verificar contenedor
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 5
+
+          docker ps --filter "name=programacionv-api"
+
+          Write-Host ""
+          Write-Host "Aplicación disponible en:"
+          Write-Host "http://localhost:5252"
+          Write-Host "http://localhost:5252/scalar"
