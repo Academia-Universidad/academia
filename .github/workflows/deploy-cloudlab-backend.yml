@@ -1,0 +1,99 @@
+name: CloudLab - Desplegar Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_deploy:
+        description: "¿Autorizar despliegue del backend CloudLab?"
+        required: true
+        default: "sí"
+        type: choice
+        options: ["sí", "no"]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.confirm_deploy == 'sí' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login GHCR
+        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+
+      - name: Build CloudLab API
+        run: docker build -t ghcr.io/academia-universidad/cloudlab-api:latest -f backend/CloudLab.Api/Dockerfile backend/CloudLab.Api
+
+      - name: Push CloudLab API
+        run: docker push ghcr.io/academia-universidad/cloudlab-api:latest
+
+      - name: Desplegar SOLO CloudLab API
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script: |
+            set -e
+            IMAGE="ghcr.io/academia-universidad/cloudlab-api:latest"
+            NAME="cloudlab-api"
+
+            # Conserva automáticamente la red Docker actual.
+            NETWORK=$(docker inspect "$NAME" --format '{{range $n,$v := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' 2>/dev/null | head -1 || true)
+            if [ -z "$NETWORK" ]; then
+              echo "ERROR: no se pudo determinar la red actual de cloudlab-api. No se modifica nada."
+              exit 1
+            fi
+
+            # Antes de modificar producción, comprueba que LocalStack comparte esa red.
+            if ! docker inspect cloudlab-localstack --format '{{range $n,$v := .NetworkSettings.Networks}}{{$n}}{{"\n"}}{{end}}' 2>/dev/null | grep -Fxq "$NETWORK"; then
+              echo "ERROR: cloudlab-localstack no comparte la red $NETWORK. No se modifica nada."
+              exit 1
+            fi
+
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+            docker pull "$IMAGE"
+
+            # Guarda la imagen actual para rollback.
+            OLD_IMAGE=$(docker inspect "$NAME" --format '{{.Config.Image}}')
+
+            # Se toca exclusivamente cloudlab-api.
+            docker stop "$NAME"
+            docker rm "$NAME"
+
+            start_api () {
+              docker run -d                 --name "$NAME"                 --restart unless-stopped                 --network "$NETWORK"                 -p 6080:8080                 -e ASPNETCORE_ENVIRONMENT=Production                 -e DOTNET_RUNNING_IN_CONTAINER=true                 -e ASPNETCORE_URLS=http://+:8080                 --log-driver json-file                 --log-opt max-size=10m                 --log-opt max-file=3                 "$1"
+            }
+
+            start_api "$IMAGE"
+
+            OK=false
+            for i in 1 2 3; do
+              sleep 10
+              STATUS=$(docker inspect "$NAME" --format '{{.State.Status}}' 2>/dev/null || echo not-found)
+              echo "Validación $i/3: $STATUS"
+              if [ "$STATUS" = "running" ]; then
+                OK=true
+                break
+              fi
+              docker logs --tail=50 "$NAME" || true
+            done
+
+            if [ "$OK" = "true" ]; then
+              echo "CloudLab API desplegado."
+              echo "Puerto conservado: 6080:8080"
+              echo "Red conservada: $NETWORK"
+              docker logs --tail=30 "$NAME" || true
+              exit 0
+            fi
+
+            # Rollback: también afecta exclusivamente cloudlab-api.
+            echo "Falló la nueva versión. Ejecutando rollback..."
+            docker logs "$NAME" || true
+            docker rm -f "$NAME" 2>/dev/null || true
+            start_api "$OLD_IMAGE"
+            sleep 10
+            docker inspect "$NAME" --format 'Rollback status: {{.State.Status}}'
+            exit 1
