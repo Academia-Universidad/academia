@@ -27,7 +27,7 @@ jobs:
 
       - name: Login en GHCR
         run: |
-          echo "${{ secret.GHCR_TOKEN }}" | docker login ghcr.io \
+          echo "${{ secrets.GHCR_TOKE }}" | docker login ghcr.io \
             -u "${{ secrets.GHCR_USERNAME }}" \
             --password-stdin
 
